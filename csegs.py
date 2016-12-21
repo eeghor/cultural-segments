@@ -8,6 +8,10 @@ import numpy as np
 import re
 from collections import defaultdict, Counter
 
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
 data_file = sys.argv[1]
 
 col_names = "custID days_ahead perf_time trans_date paid_tkt all_tkt paid_aud venue_state venue_name mtyp_p mtyp_s event_name show_desc dist_km  cults sex age_gr pcode cust_state mosaic".split()
@@ -90,7 +94,7 @@ for cus in unique_customers_w_mosaic:
 
 	if str(this_df["mosaic"].unique()[0]).isalnum():
 		cus_mosaic = this_df["mosaic"].unique()[0]
-		print("mosaic:",cus_mosaic)
+		#print("mosaic:",cus_mosaic)
 		m_letter, m_number = _decompose_mosaic(cus_mosaic)
 		cust_feature_dict[cus]["belongs_to_mosaic_letter_" + m_letter]
 		cust_feature_dict[cus]["mosaic_number_" + str(m_number)]
@@ -157,10 +161,56 @@ for cus in unique_customers_w_mosaic:
 	else:
 		cust_feature_dict[cus]["usually_buys_odd"] = 1
 
-	print(cust_feature_dict[cus])
-	#print("mtypes for this customer", cust_mtype_counts[cus])
-	#cust_pmtype_counts[cus] = Counter(this_df["mtyp_p"])
-	#print("primary mtypes for this customer", cust_pmtype_counts)
-	#mos_letter, mosn = _decompose_mosaic(this_df.mosaic[0])
-	#print("mosaic letter: {}, mosaic number {}".format(mos_letter, mosn))
+
+	# age feature
+	for ag in this_df["age_gr"]:
+		cust_feature_dict[cus]["aged_" + ag] = 1
+
+	# cultural segment
+	cust_feature_dict[cus]["cult"] = this_df["cults"].unique().tolist()[0]
+
+	#print(cust_feature_dict[cus])
+	
+print("finished creating features...")
+
+customer_profile = pd.DataFrame.from_dict(cust_feature_dict, orient="index")
+customer_profile["custID"] = customer_profile.index
+customer_profile = customer_profile.fillna(0)
+
+# print("customer profile")
+# print(customer_profile.head())
+
+customer_profile.to_csv("cult_cust_profile.csv")
+print("created and saved a customer profile...")
+
+X_train, X_test, y_train, y_test = train_test_split(customer_profile.loc[:, [c for c in list(customer_profile) if c not in ["cult", "custID"]]],
+														 customer_profile.loc[:,"cult"],
+								 test_size=0.2, stratify=customer_profile.cult, random_state=49)
+print("split into the training and testing sets...")
+
+rf_parameters = {'n_estimators': np.arange(1,120,1).tolist(),'min_weight_fraction_leaf':np.arange(0.01,0.3,0.01).tolist()}
+
+forest = RandomForestClassifier()
+print("setting up grid search...")
+rf_grid = GridSearchCV(forest, rf_parameters)
+print("training random forests...")
+time_s = time.time()
+rf_grid.fit(X_train, y_train)
+time_e = time.time()
+print("done. elapsed time {} minutes".format(round((time_e - time_s)/60,1)))
+# print("best parameter values:", rf_grid.best_params_)
+best_forest = rf_grid.best_estimator_
+# best_rf.fit(X_train, y_train)
+print("---> accuracy score is {}".format(round(accuracy_score(y_test, rf_grid.predict(X_test)), 2)))
+
+fimps = sorted( zip(list(X_test), best_forest.feature_importances_), key=lambda x: x[1], reverse=True)[:20]
+upload_df = pd.DataFrame({"feature":[k for k, v in fimps], "importance":[ "%.3f" % v for k,v in fimps]})
+upload_df["importance"] = upload_df["importance"].astype(float)
+
+print("---> feature importances")
+print(upload_df)
+
+upload_df.to_csv("./data/feature_importances.csv", sep="\t", index=False)
+
+
 
